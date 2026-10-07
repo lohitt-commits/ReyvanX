@@ -1,0 +1,26 @@
+services:
+  dashboard:
+    environment:
+      NETBIRD_MGMT_API_ENDPOINT: http://127.0.0.1
+      NETBIRD_MGMT_GRPC_API_ENDPOINT: http://127.0.0.1
+      AUTH_AUTHORITY: http://127.0.0.1/oauth2
+
+  netbird-server:
+    ports: !override
+      - "127.0.0.1:8081:80"
+      - "127.0.0.1:3478:3478/udp"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9090:9090"
+
+  local-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:80:80"
+    volumes:
+      - "${REYVANX_REPO:?set REYVANX_REPO to the repository root}/deploy/local/Caddyfile:/etc/caddy/Caddyfile:ro"
+    networks:
+      - netbird
+    depends_on:
+      - dashboard
+      - netbird-server
