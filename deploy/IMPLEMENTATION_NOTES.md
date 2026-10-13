@@ -12,7 +12,7 @@ tokens, private endpoints, or other secrets here.
 |---|---|---|
 | 1. Understand the code | Complete | Repository findings and open questions are below. |
 | 2. Run it as-is | Complete with health caveat | Dashboard and Management status endpoints respond; combined-server `/health` reports HTTP 503 in the HTTP-only setup. See [RUNNING_LOCALLY.md](./RUNNING_LOCALLY.md). |
-| 3. One Docker image per service | Not started | |
+| 3. One Docker image per service | In progress; Dashboard blocked | Three backend Dockerfiles and local endpoint tests added; Dashboard source is absent. Scan findings require review before production use. |
 | 4. Docker Compose for the whole stack | Not started | |
 | 5. Kubernetes manifests (local kind cluster) | Not started | |
 | 6. Auto-scaling at 70% | Not started | |
@@ -382,6 +382,102 @@ flowchart LR
 - **Status:** Complete for the documented Task 2 criterion that the Dashboard
   opens and service status endpoints respond, with the unhealthy `/health`
   response explicitly disclosed above.
+
+## Task 3 record (2026-10-07)
+
+### Scope and implementation
+
+- Added source-built multi-stage images in
+  [management.Dockerfile](./docker/management.Dockerfile),
+  [signal.Dockerfile](./docker/signal.Dockerfile), and
+  [relay.Dockerfile](./docker/relay.Dockerfile).
+- Reused the upstream binary names, CLI entrypoints, and required Go 1.26.7
+  toolchain. Default listeners use port 8080 rather than privileged ports.
+- All images run as UID/GID `65532:65532`. Management retains CGO for SQLite
+  with a distroless base runtime; Signal and Relay use static distroless.
+  Build/runtime image indexes are digest-pinned.
+- Added [build-images.sh](./docker/build-images.sh),
+  [smoke-test.sh](./docker/smoke-test.sh), and
+  [Docker image instructions](./docker/README.md).
+- Tags/OCI labels identify the source snapshot. Application wire version
+  remains `development`; an image tag is not an upstream release claim.
+- No Go business logic, application dependencies, Task 2 deployment, or AWS
+  resources changed. No images were pushed.
+
+### Verification and sizes
+
+Source commit: `e41cd7bf6842` (working tree includes deployment additions).
+Image tag: `dev-e41cd7b`. Sizes below are Docker's uncompressed amd64 image
+sizes, not compressed registry downloads or total shared disk usage.
+
+| Image | amd64 bytes | Approximate MB (decimal) |
+|---|---:|---:|
+| `reyvanx/management:dev-e41cd7b` | 111579791 | 111.58 |
+| `reyvanx/signal:dev-e41cd7b` | 32993692 | 32.99 |
+| `reyvanx/relay:dev-e41cd7b` | 39895397 | 39.90 |
+| Dashboard | Not built | Source absent |
+
+- Individual `docker buildx build --platform linux/amd64 --load` commands
+  with the corresponding Dockerfile, version/revision build arguments, and
+  repository-root context passed for all three backend services.
+- Signal and Relay `--platform linux/amd64,linux/arm64 --load` builds passed.
+  Both arm64 entrypoints executed successfully with `docker run --platform
+  linux/arm64 ... --help` under Docker Desktop emulation.
+- Management's final amd64 distroless image built successfully. Its native
+  arm64 CGO build is being checked separately.
+- `IMAGE_TAG=dev-e41cd7b sh deploy/docker/smoke-test.sh` passed against the final
+  amd64 images. Management `/api/instance`, Signal `/metrics`, and Relay
+  `/metrics` returned HTTP 200. All ran non-root, with read-only root filesystems,
+  all capabilities dropped, and `no-new-privileges`.
+- Management's test exercised SQLite and embedded IdP startup on a fresh
+  disposable volume. The script cleaned up its containers, volume, and config;
+  it did not touch the Task 2 database.
+- Shell syntax checks passed for both scripts. These are image-startup tests,
+  not a complete split-stack or peer-registration test.
+
+### Vulnerability scan
+
+Trivy `0.69.3`, pinned to image index
+`sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c`,
+scanned local amd64 image archives on 2026-10-07. Public vulnerability databases
+were downloaded; application images were not uploaded to a scanning service.
+Counts are package-level findings, not distinct CVEs or confirmed exploits.
+Arm64-specific packages have not been independently scanned.
+
+| Final image | Critical | High | Medium | Low | Unknown |
+|---|---:|---:|---:|---:|---:|
+| Management | 1 | 8 | 29 | 15 | 2 |
+| Signal | 1 | 3 | 4 | 1 | 2 |
+| Relay | 1 | 3 | 7 | 1 | 2 |
+| Dashboard | Not scanned | Not scanned | Not scanned | Not scanned | Not scanned |
+
+The first Management candidate used Debian slim and had 267 findings; removing
+unneeded OS utilities with a compatible distroless base reduced the final count
+to 55. The final image passed the same SQLite/endpoint test after this change.
+
+Outstanding findings include:
+
+- All three: gRPC `v1.80.0` flagged for `CVE-2026-84304`, `CVE-2026-84445`, and
+  `GHSA-hrxh-6v49-42gf`.
+- Management: Docker Go library findings `CVE-2026-41567` and `CVE-2026-42306`;
+  `golang.org/x/mod` findings `CVE-2026-56864` and `CVE-2026-56865`;
+  runtime `libssl3` finding `CVE-2026-84782`.
+- All three: critical `CVE-2025-10678` is attributed to the NetBird module's
+  development pseudo-version. Its applicability to this fork must be checked
+  against the actual source/upstream fix; the scan alone cannot resolve it.
+  It has not been dismissed or suppressed.
+
+These images are **not certified production-ready**. Dependency changes and
+security remediation require approval; none were silently applied to make the
+scan pass.
+
+### Dashboard blocker and next decision
+
+The web Dashboard source/build is not in this checkout. The desktop UI and
+proxy UI are different applications. Ask Lohit for the Dashboard repository and
+compatible commit/tag, or approval to use a pinned upstream Dashboard release.
+The existing published Task 2 image does not count as a source-built Task 3
+image. Do not advance to Task 4 until the four-image acceptance criterion is met.
 
 ## Future task records
 
